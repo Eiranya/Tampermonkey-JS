@@ -3,7 +3,7 @@
 // @namespace    https://github.com/Eiranya/Tampermonkey-JS
 // @version      1.3.1
 // @description  在 Twitter/X 用户主页一键记录并批量保存图片和视频（打包 ZIP），支持去重、已保存记忆、无效视频过滤、小文件过滤、自动滚动、推文标记、满量自动保存、可视化设置面板、视频日期自动还原
-// @author       QClaw / Eiranya
+// @author       WorkBuddy
 // @updateURL    https://raw.githubusercontent.com/Eiranya/Tampermonkey-JS/main/twitter-image-saver.user.js
 // @downloadURL  https://raw.githubusercontent.com/Eiranya/Tampermonkey-JS/main/twitter-image-saver.user.js
 // @match        https://twitter.com/*
