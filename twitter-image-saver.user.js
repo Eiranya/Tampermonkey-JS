@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitter/X 媒体批量保存器
 // @namespace    https://github.com/Eiranya/Tampermonkey-JS
-// @version      1.3.1
+// @version      1.4.0
 // @description  在 Twitter/X 用户主页一键记录并批量保存图片和视频（打包 ZIP），支持去重、已保存记忆、无效视频过滤、小文件过滤、自动滚动、推文标记、满量自动保存、可视化设置面板、视频日期自动还原
 // @author       WorkBuddy
 // @updateURL    https://raw.githubusercontent.com/Eiranya/Tampermonkey-JS/main/twitter-image-saver.user.js
@@ -306,6 +306,12 @@ if (typeof module !== 'undefined') {
     // 按钮位置
     BUTTON_POSITION: { bottom: '24px', right: '24px' },
     BUTTON_Z_INDEX: 999999,
+
+    // ── 空闲自动停止 ──
+    // 时间窗口（毫秒）：记录数量在该窗口内持续没有增长就自动结束记录并打包；设为 0 关闭该功能
+    IDLE_TIMEOUT_MS: 60 * 1000,
+    // 轮询间隔（毫秒）：每隔多久检查一次记录数量有没有增长
+    IDLE_CHECK_INTERVAL_MS: 5 * 1000,
   };
 
   const CONFIG_STORE_KEY = 'twSaverConfig';
@@ -344,6 +350,10 @@ if (typeof module !== 'undefined') {
     btnEl: null,
     hookInstalled: false,
     settingsOpen: false,
+    // 空闲自动停止用：上次轮询时的记录数量、最近一次数量增长的时间、轮询定时器
+    lastCount: 0,
+    lastGrowthAt: 0,
+    idleTimer: null,
   };
 
   // 视频直链缓存：key = videoId, value = 最高清 mp4 URL
@@ -1266,6 +1276,44 @@ if (typeof module !== 'undefined') {
 
   function stopAutoScroll() {
     if (state.scrollTimer) { clearInterval(state.scrollTimer); state.scrollTimer = null; }
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // ⏱ 空闲自动停止
+  // ════════════════════════════════════════════════════════════════
+
+  // 定时轮询已记录数量：超过 IDLE_TIMEOUT_MS 一直没有增长，就自动结束记录并打包
+  function startIdleWatch() {
+    stopIdleWatch();
+    if (CONFIG.IDLE_TIMEOUT_MS <= 0) {
+      log('空闲自动停止：已关闭（IDLE_TIMEOUT_MS = 0）');
+      return;
+    }
+    state.lastCount = state.media.size;
+    state.lastGrowthAt = Date.now();
+
+    state.idleTimer = setInterval(() => {
+      if (!state.isRecording) { stopIdleWatch(); return; }
+      // 已经在保存流程里了，交给它自己收尾
+      if (state.saving || state.autoSaving) return;
+
+      const count = state.media.size;
+      if (count > state.lastCount) {
+        state.lastCount = count;
+        state.lastGrowthAt = Date.now();
+        return;
+      }
+      if (Date.now() - state.lastGrowthAt < CONFIG.IDLE_TIMEOUT_MS) return;
+
+      stopIdleWatch();
+      state.autoSaving = true;
+      log(`${Math.round(CONFIG.IDLE_TIMEOUT_MS / 1000)} 秒内没有新增媒体，自动停止记录...`);
+      setTimeout(() => stopAndSave(true), 200);
+    }, CONFIG.IDLE_CHECK_INTERVAL_MS);
+  }
+
+  function stopIdleWatch() {
+    if (state.idleTimer) { clearInterval(state.idleTimer); state.idleTimer = null; }
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -2222,6 +2270,7 @@ if (typeof module !== 'undefined') {
     discoverMedia();
     startObserver();
     startAutoScroll();
+    startIdleWatch();
     updateButton();
     checkAutoSave();
   }
@@ -2237,6 +2286,7 @@ if (typeof module !== 'undefined') {
     state.isRecording = false;
     stopObserver();
     stopAutoScroll();
+    stopIdleWatch();
 
     log(`记录停止，共记录 ${state.media.size} 个媒体`);
 
