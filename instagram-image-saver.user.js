@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Instagram 媒体批量保存器
 // @namespace    https://github.com/Eiranya/Tampermonkey-JS
-// @version      1.3.0
+// @version      1.3.1
 // @description  在 Instagram 用户主页 / 帖子页一键批量保存图片和视频（打包 ZIP），JSON 优先解析内嵌数据（_sharedData / __additionalDataLoaded / xdt_api__v1__），支持轮播全量、增量去重、已保存记忆、小文件过滤（HEAD/Range 预筛 + 下载后实际字节复核）、自动排除快拍/精选封面、自动巡览逐帖采集、每半小时请求预算与风控熔断、断点续抓、可视化设置面板
 // @author       WorkBuddy
 // @updateURL    https://raw.githubusercontent.com/Eiranya/Tampermonkey-JS/main/instagram-image-saver.user.js
@@ -257,7 +257,7 @@ if (typeof module !== 'undefined') {
   try { debugMode = !!GM_getValue('igDebugMode', false); } catch (e) {}
 
   // v1.1.22：脚本版本号（与 @version 元数据同步，设置面板 Debug 小节展示）
-  const SCRIPT_VERSION = '1.3.0';
+  const SCRIPT_VERSION = '1.3.1';
 
   // ════════════════════════════════════════════════════════════════
   // 📌 配置区
@@ -3258,6 +3258,10 @@ if (typeof module !== 'undefined') {
         if (!debugMode) row.style.display = 'none';
       }
       row.appendChild(makeEl('span', 'font-size:13px;color:#0f1419', t.label));
+      // v1.3.1：Debug 高级参数行视觉区分（方案 C）——DBG 徽标紧跟标签文字右侧
+      if (t.debugOnly) {
+        row.appendChild(makeEl('span', 'font-size:10px;line-height:1;background:#7c5cff;color:#fff;padding:2px 5px;border-radius:3px;margin-left:6px;letter-spacing:0.3px;flex:none', 'DBG'));
+      }
       const right = makeEl('div', 'display:flex;align-items:center');
       if (t.type === 'select') {
         const sel = document.createElement('select');
