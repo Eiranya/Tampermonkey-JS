@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Instagram 媒体批量保存器
 // @namespace    https://github.com/Eiranya/Tampermonkey-JS
-// @version      1.2.0
+// @version      1.2.1
 // @description  在 Instagram 用户主页 / 帖子页一键批量保存图片和视频（打包 ZIP），JSON 优先解析内嵌数据（_sharedData / __additionalDataLoaded / xdt_api__v1__），支持轮播全量、增量去重、已保存记忆、小文件过滤（HEAD/Range 预筛 + 下载后实际字节复核）、自动排除快拍/精选封面、降频自动滚动（5–15s ± 抖动）、请求预算与风控熔断、断点续抓、可视化设置面板
 // @author       WorkBuddy
 // @updateURL    https://raw.githubusercontent.com/Eiranya/Tampermonkey-JS/main/instagram-image-saver.user.js
@@ -257,7 +257,7 @@ if (typeof module !== 'undefined') {
   try { debugMode = !!GM_getValue('igDebugMode', false); } catch (e) {}
 
   // v1.1.22：脚本版本号（与 @version 元数据同步，设置面板 Debug 小节展示）
-  const SCRIPT_VERSION = '1.2.0';
+  const SCRIPT_VERSION = '1.2.1';
 
   // ════════════════════════════════════════════════════════════════
   // 📌 配置区
@@ -266,16 +266,18 @@ if (typeof module !== 'undefined') {
   // 说明：Instagram 信息流是图片密集型、风控敏感，滚动节奏显著慢于 Twitter 工具。
   // 默认滚动间隔 10s 基准 ±30% 抖动（约 7–13s，落在设计文档建议的 5–15s 区间）。
   const CONFIG_DEFAULTS = Object.freeze({
-    // 每小时媒体抓取/下载请求预算（次），接近即自动暂停采集
-    REQUEST_BUDGET: 180,
+    // v1.2.1：每半小时媒体抓取/下载请求预算（次），接近即自动暂停采集。
+    // 窗口时长由内部常量 BUDGET_WINDOW_MS 控制（30 分钟），请与面板标签保持一致。
+    REQUEST_BUDGET: 80,
     // v1.1.19/v1.1.20：满量自动保存触发阈值（按"已采集帖子数"计）。
     // 已与"缓存上限"合并为一个功能——达到该帖数即自动保存；媒体缓存硬上限由它派生（×20），
     // 不再单独暴露配置。
-    MAX_AUTO_SAVE_POSTS: 100,
+    MAX_AUTO_SAVE_POSTS: 50,
     // 每个 ZIP 打包的媒体数量上限（避免单 zip 内存爆炸）
     BATCH_SIZE: 150,
-    // 拉取 Blob 并发数
-    DOWNLOAD_CONCURRENCY: 3,
+    // v1.2.1：拉取 Blob 并发数默认降为 1（串行），并移入 Debug 高级参数。
+    // 串行下载对 Instagram CDN 更"像人"，显著降低触发风控的概率；代价是打包速度变慢。
+    DOWNLOAD_CONCURRENCY: 1,
     // v1.1.20：媒体最小体积（字节）——图片与视频统一阈值，小于该值的媒体视为无效/损坏跳过
     MIN_MEDIA_SIZE: 50 * 1024,
     // 轮播点击展开上限（次/帖），JSON 缺失时兜底用
@@ -294,15 +296,16 @@ if (typeof module !== 'undefined') {
 
   // 设置面板的字段描述：scale = 显示单位 → 内部单位的换算
   const TUNABLE = [
-    { key: 'REQUEST_BUDGET',       label: '每小时请求预算', unit: '次', scale: 1,  min: 20,  max: 1000,  step: 10 },
+    { key: 'REQUEST_BUDGET',       label: '每半小时请求预算', unit: '次', scale: 1, min: 20,  max: 1000,  step: 10 },
     { key: 'MAX_AUTO_SAVE_POSTS',  label: '满量自动保存', unit: '帖', scale: 1,    min: 10,  max: 2000,  step: 10 },
     { key: 'BATCH_SIZE',           label: '每包数量',     unit: '个', scale: 1,    min: 10,  max: 500,   step: 10 },
-    { key: 'DOWNLOAD_CONCURRENCY', label: '下载并发',     unit: '路', scale: 1,    min: 1,   max: 8,     step: 1 },
     { key: 'MIN_MEDIA_SIZE',       label: '媒体最小体积', unit: 'KB', scale: 1024, min: 0,   max: 10240, step: 5 },
     { key: 'MAX_CAROUSEL_CLICKS',  label: '轮播点击上限', unit: '次', scale: 1,    min: 1,   max: 50,    step: 1 },
     { key: 'TOUR_WAIT_MS',         label: '巡览等待渲染', unit: '秒', scale: 1000, min: 3,   max: 120,   step: 1 },
     { key: 'TOUR_MAX_POSTS',       label: '巡览帖子上限', unit: '篇', scale: 1,    min: 5,   max: 1000,  step: 5 },
     // v1.1.22：仅 Debug 模式显示的高级参数（视频打包阈值 / ZIP 分卷阈值）
+    // v1.2.1：下载并发也移入本组（默认 1 路串行，普通用户无需调整）
+    { key: 'DOWNLOAD_CONCURRENCY', label: '下载并发',     unit: '路', scale: 1,    min: 1,   max: 8,     step: 1, debugOnly: true },
     { key: 'VIDEO_ZIP_MAX_MB',     label: '视频打包阈值', unit: 'MB', scale: 1,    min: 10,  max: 1024,  step: 10, debugOnly: true },
     { key: 'ZIP_SPLIT_MB',         label: 'ZIP 分卷阈值', unit: 'MB', scale: 1,    min: 100, max: 4096,  step: 100, debugOnly: true },
   ];
@@ -310,6 +313,9 @@ if (typeof module !== 'undefined') {
   const CONFIG = {
     ...CONFIG_DEFAULTS,
     // ── 内部常量（面板不可调）──
+    // v1.2.1：请求预算窗口时长（毫秒）——由"每小时"下调为"每半小时"。
+    // 窗口越短，爆发式请求被摊平得越保守；与 REQUEST_BUDGET 一起决定实际速率上限。
+    BUDGET_WINDOW_MS: 30 * 60 * 1000,
     // HEAD 请求并发数
     HEAD_CONCURRENCY: 4,
     // 轮播点击展开的最小/最大间隔（毫秒，随机化）
@@ -723,10 +729,10 @@ if (typeof module !== 'undefined') {
     }
   }
 
-  // 检查预算窗口是否翻转（每小时重置）
+  // 检查预算窗口是否翻转（v1.2.1：由每小时改为每半小时，见 CONFIG.BUDGET_WINDOW_MS）
   function checkBudget() {
     const now = Date.now();
-    if (now - budget.windowStart >= 3600000) {
+    if (now - budget.windowStart >= CONFIG.BUDGET_WINDOW_MS) {
       budget.windowStart = now;
       budget.count = 0;
       if (budget.paused) setBudgetPaused(false);
