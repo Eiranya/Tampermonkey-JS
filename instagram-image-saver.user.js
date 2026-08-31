@@ -3078,6 +3078,7 @@ if (typeof module !== 'undefined') {
 
   const ICON = {
     gear: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M3 12c0-1.1.9-2 2-2s2 .9 2 2-.9 2-2 2-2-.9-2-2zm9 2c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm7 0c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z"/></svg>',
+    tune: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><circle cx="9.5" cy="7" r="2.4" fill="#fff"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2.4" fill="#fff"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="8" cy="17" r="2.4" fill="#fff"/></svg>',
     camera: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 8a5 5 0 100 10 5 5 0 000-10zm0 2.5a2.5 2.5 0 110 5 2.5 2.5 0 010-5zM9.5 3l-1.3 1.5H5a2 2 0 00-2 2v11a2 2 0 002 2h14a2 2 0 002-2v-11a2 2 0 00-2-2h-3.2L14.5 3h-5z"/></svg>',
     stop: '<span style="width:10px;height:10px;background:currentColor;display:inline-block;flex:none;margin-right:2px" aria-hidden="true"></span>',
     save: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 2.59l5.7 5.7-1.41 1.42L13 6.41V16h-2V6.41l-3.3 3.3-1.41-1.42L12 2.59zM21 15l-.02 3.51c0 1.38-1.12 2.49-2.5 2.49H5.5C4.11 21 3 19.88 3 18.5V15h2v3.5c0 .28.22.5.5.5h12.98c.28 0 .5-.22.5-.5L19 15h2z"/></svg>',
@@ -3210,11 +3211,13 @@ if (typeof module !== 'undefined') {
     const head = makeEl('div', 'display:flex;align-items:center;justify-content:space-between;padding:11px 14px 9px;border-bottom:1px solid rgba(15,20,25,0.08)');
     head.appendChild(makeEl('span', 'font-size:14px;font-weight:700', 'Instagram 媒体保存'));
     // v1.1.22：头部右侧「Debug/版本」按钮——展开 Debug 小节（版本号 + Debug 开关）
-    // 图标：暂保留 emoji 扳手 🔧——图标改版方案待用户选定后再实施（勿直接改动）
+    // 图标：单色「调节滑块」SVG（方案 A，用户选定）——随 currentColor；原 emoji 扳手
+    // 跨平台字形/配色不一，已弃用
     // 移除右上角 × 关闭按钮：面板仍可经浮动齿轮按钮（再次点击）/ 点击面板外部 /
     // 油猴菜单「打开设置面板」三种方式关闭（closeSettings 保留）
     const headRight = makeEl('div', 'display:flex;align-items:center;gap:10px');
-    const dbgGear = makeEl('span', 'cursor:pointer;font-size:16px;line-height:1;color:#536471;padding:0 2px', '🔧');
+    const dbgGear = makeEl('span', 'cursor:pointer;display:inline-flex;align-items:center;color:#536471;padding:0 2px', null);
+    dbgGear.innerHTML = ICON.tune;
     dbgGear.title = 'Debug / 版本';
     dbgGear.addEventListener('click', () => { toggleDebugSection(panel); });
     headRight.appendChild(dbgGear);
