@@ -294,7 +294,7 @@ if (typeof module !== 'undefined') {
     VIDEO_ZIP_MAX_MB: 150,
     // v1.2.2：下载请求随机间隔（毫秒）——每次下载类请求（HEAD/Range 探测、Blob 拉取、GM_download）
     // 发出前随机等待，呈"短间隔为主、长间隔稀少"的偏态分布，避免请求集中发送触发风控
-    DOWNLOAD_DELAY_MIN_MS: 50,
+    DOWNLOAD_DELAY_MIN_MS: 300,
     DOWNLOAD_DELAY_MAX_MS: 5000,
   });
 
@@ -324,8 +324,9 @@ if (typeof module !== 'undefined') {
     // 窗口越短，爆发式请求被摊平得越保守；与 REQUEST_BUDGET 一起决定实际速率上限。
     BUDGET_WINDOW_MS: 30 * 60 * 1000,
     // v1.2.2：下载间隔偏斜指数——delay = min + (max-min) * rand^SKEW，>1 时短间隔出现概率更高
-    // SKEW=3 时：约 45% 的间隔 < 0.5s、约 21% > 2.5s（min=50ms / max=5000ms 基准）
-    DOWNLOAD_DELAY_SKEW: 3,
+    // ★ 内部常量，不进设置面板（用户明确要求从设置菜单移除，仅改代码调整）
+    // SKEW=4 时：约 45% 的间隔 < 0.5s、约 62% < 1s、约 17% > 2.5s（min=300ms / max=5000ms 基准）
+    DOWNLOAD_DELAY_SKEW: 4,
     // HEAD 请求并发数
     HEAD_CONCURRENCY: 4,
     // 轮播点击展开的最小/最大间隔（毫秒，随机化）
@@ -2371,7 +2372,7 @@ if (typeof module !== 'undefined') {
   function downloadJitter() {
     const [lo, hi] = downloadDelayRange();
     if (hi <= 0) return Promise.resolve();
-    const skew = (typeof CONFIG.DOWNLOAD_DELAY_SKEW === 'number' && CONFIG.DOWNLOAD_DELAY_SKEW > 0) ? CONFIG.DOWNLOAD_DELAY_SKEW : 3;
+    const skew = (typeof CONFIG.DOWNLOAD_DELAY_SKEW === 'number' && CONFIG.DOWNLOAD_DELAY_SKEW > 0) ? CONFIG.DOWNLOAD_DELAY_SKEW : 4;
     const r = Math.pow(Math.random(), skew);
     const ms = Math.round(lo + (hi - lo) * r);
     return new Promise((resolve) => setTimeout(resolve, ms));
