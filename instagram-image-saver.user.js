@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Instagram 媒体批量保存器
 // @namespace    https://github.com/Eiranya/Tampermonkey-JS
-// @version      1.2.1
+// @version      1.2.2
 // @description  在 Instagram 用户主页 / 帖子页一键批量保存图片和视频（打包 ZIP），JSON 优先解析内嵌数据（_sharedData / __additionalDataLoaded / xdt_api__v1__），支持轮播全量、增量去重、已保存记忆、小文件过滤（HEAD/Range 预筛 + 下载后实际字节复核）、自动排除快拍/精选封面、降频自动滚动（5–15s ± 抖动）、请求预算与风控熔断、断点续抓、可视化设置面板
 // @author       WorkBuddy
 // @updateURL    https://raw.githubusercontent.com/Eiranya/Tampermonkey-JS/main/instagram-image-saver.user.js
@@ -257,7 +257,7 @@ if (typeof module !== 'undefined') {
   try { debugMode = !!GM_getValue('igDebugMode', false); } catch (e) {}
 
   // v1.1.22：脚本版本号（与 @version 元数据同步，设置面板 Debug 小节展示）
-  const SCRIPT_VERSION = '1.2.1';
+  const SCRIPT_VERSION = '1.2.2';
 
   // ════════════════════════════════════════════════════════════════
   // 📌 配置区
@@ -292,6 +292,10 @@ if (typeof module !== 'undefined') {
     ZIP_SPLIT_MB: 1024,
     // v1.1.22：视频打包阈值（MB）——小于该值的视频打包进 ZIP；≥ 该值的大视频保存时单独下载（GM_download）
     VIDEO_ZIP_MAX_MB: 150,
+    // v1.2.2：下载请求随机间隔（毫秒）——每次下载类请求（HEAD/Range 探测、Blob 拉取、GM_download）
+    // 发出前随机等待，呈"短间隔为主、长间隔稀少"的偏态分布，避免请求集中发送触发风控
+    DOWNLOAD_DELAY_MIN_MS: 50,
+    DOWNLOAD_DELAY_MAX_MS: 5000,
   });
 
   // 设置面板的字段描述：scale = 显示单位 → 内部单位的换算
@@ -308,6 +312,9 @@ if (typeof module !== 'undefined') {
     { key: 'DOWNLOAD_CONCURRENCY', label: '下载并发',     unit: '路', scale: 1,    min: 1,   max: 8,     step: 1, debugOnly: true },
     { key: 'VIDEO_ZIP_MAX_MB',     label: '视频打包阈值', unit: 'MB', scale: 1,    min: 10,  max: 1024,  step: 10, debugOnly: true },
     { key: 'ZIP_SPLIT_MB',         label: 'ZIP 分卷阈值', unit: 'MB', scale: 1,    min: 100, max: 4096,  step: 100, debugOnly: true },
+    // v1.2.2：下载请求随机间隔（毫秒），仅 Debug 模式显示
+    { key: 'DOWNLOAD_DELAY_MIN_MS', label: '下载间隔下限', unit: '毫秒', scale: 1, min: 0,  max: 60000,  step: 10, debugOnly: true },
+    { key: 'DOWNLOAD_DELAY_MAX_MS', label: '下载间隔上限', unit: '毫秒', scale: 1, min: 10, max: 120000, step: 50, debugOnly: true },
   ];
 
   const CONFIG = {
@@ -316,6 +323,9 @@ if (typeof module !== 'undefined') {
     // v1.2.1：请求预算窗口时长（毫秒）——由"每小时"下调为"每半小时"。
     // 窗口越短，爆发式请求被摊平得越保守；与 REQUEST_BUDGET 一起决定实际速率上限。
     BUDGET_WINDOW_MS: 30 * 60 * 1000,
+    // v1.2.2：下载间隔偏斜指数——delay = min + (max-min) * rand^SKEW，>1 时短间隔出现概率更高
+    // SKEW=3 时：约 45% 的间隔 < 0.5s、约 21% > 2.5s（min=50ms / max=5000ms 基准）
+    DOWNLOAD_DELAY_SKEW: 3,
     // HEAD 请求并发数
     HEAD_CONCURRENCY: 4,
     // 轮播点击展开的最小/最大间隔（毫秒，随机化）
@@ -2346,6 +2356,39 @@ if (typeof module !== 'undefined') {
   // ════════════════════════════════════════════════════════════════
 
   /**
+   * v1.2.2：下载请求随机间隔——每次下载类请求（HEAD/Range 探测、Blob 拉取、GM_download，
+   * 含失败重试）发出前调用。时长在 [DOWNLOAD_DELAY_MIN_MS, DOWNLOAD_DELAY_MAX_MS] 内呈偏态分布：
+   * delay = min + (max-min) * rand^SKEW，SKEW>1 → 短间隔为主、长间隔稀少，
+   * 避免请求集中发送触发 CDN 风控。min>max 时自动钳制；两者均 ≤0 时零等待（测试/关闭用）。
+   */
+  function downloadDelayRange() {
+    let lo = Math.max(0, Math.floor(CONFIG.DOWNLOAD_DELAY_MIN_MS) || 0);
+    let hi = Math.max(0, Math.floor(CONFIG.DOWNLOAD_DELAY_MAX_MS) || 0);
+    if (hi < lo) { const t = lo; lo = hi; hi = t; }
+    return [lo, hi];
+  }
+
+  function downloadJitter() {
+    const [lo, hi] = downloadDelayRange();
+    if (hi <= 0) return Promise.resolve();
+    const skew = (typeof CONFIG.DOWNLOAD_DELAY_SKEW === 'number' && CONFIG.DOWNLOAD_DELAY_SKEW > 0) ? CONFIG.DOWNLOAD_DELAY_SKEW : 3;
+    const r = Math.pow(Math.random(), skew);
+    const ms = Math.round(lo + (hi - lo) * r);
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * v1.2.2：以"先随机间隔、再发起请求"的方式执行 issueFn。
+   * 间隔未启用（上限 ≤0）时**同步**调用 issueFn——保持与 v1.2.1 完全一致的调用语义
+   * （关闭间隔时不引入额外微任务时序，依赖同步发起路径的调用方/单测不受影响）。
+   */
+  function withDownloadJitter(issueFn) {
+    const [, hi] = downloadDelayRange();
+    if (hi <= 0) return issueFn();
+    return downloadJitter().then(issueFn);
+  }
+
+  /**
    * Range 兜底探测：HEAD 无 Content-Length（CDN 拒 HEAD / 无长度头 / 重定向）时，
    * 改发 Range: bytes=0-0 的 GET，从 Content-Range: bytes 0-0/TOTAL 或 206
    * 响应的 Content-Length 取总大小；仍失败返回 null（保守放行，靠下载复核兜底）。
@@ -2355,37 +2398,41 @@ if (typeof module !== 'undefined') {
     let settled = false;
     const finish = (v) => { if (!settled) { settled = true; clearTimeout(timer); done(v); } };
     const timer = setTimeout(() => finish(null), 15000);
-    try {
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url: url,
-        timeout: 10000,
-        headers: { 'Referer': 'https://www.instagram.com/', 'Range': 'bytes=0-0' },
-        onload: (response) => {
-          try {
-            const status = (response && response.status) || 0;
-            const headers = String((response && response.responseHeaders) || '');
-            // Content-Range: bytes 0-0/TOTAL → TOTAL
-            const cr = headers.match(/content-range:\s*bytes\s+\d+-\d+\/(\d+)/i);
-            if (cr) { finish(parseInt(cr[1], 10)); return; }
-            // 206 响应的 Content-Length 兜底
-            if (status === 206) {
-              const cl = headers.match(/content-length:\s*(\d+)/i);
-              if (cl) { finish(parseInt(cl[1], 10)); return; }
-            }
-            finish(null);
-          } catch (e) { finish(null); }
-        },
-        onerror: () => finish(null),
-        ontimeout: () => finish(null),
-        onabort: () => finish(null),
-      });
-    } catch (e) { finish(null); }
+    // v1.2.2：请求前随机间隔
+    withDownloadJitter(() => {
+      try {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url: url,
+          timeout: 10000,
+          headers: { 'Referer': 'https://www.instagram.com/', 'Range': 'bytes=0-0' },
+          onload: (response) => {
+            try {
+              const status = (response && response.status) || 0;
+              const headers = String((response && response.responseHeaders) || '');
+              // Content-Range: bytes 0-0/TOTAL → TOTAL
+              const cr = headers.match(/content-range:\s*bytes\s+\d+-\d+\/(\d+)/i);
+              if (cr) { finish(parseInt(cr[1], 10)); return; }
+              // 206 响应的 Content-Length 兜底
+              if (status === 206) {
+                const cl = headers.match(/content-length:\s*(\d+)/i);
+                if (cl) { finish(parseInt(cl[1], 10)); return; }
+              }
+              finish(null);
+            } catch (e) { finish(null); }
+          },
+          onerror: () => finish(null),
+          ontimeout: () => finish(null),
+          onabort: () => finish(null),
+        });
+      } catch (e) { finish(null); }
+    });
   }
 
   function getMediaSize(url) {
     countRequest(1);
-    return new Promise((resolve) => {
+    // v1.2.2：请求前随机间隔（超时窗口自请求实际发出起算）
+    return withDownloadJitter(() => new Promise((resolve) => {
       let settled = false;
       const done = (v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
       const timer = setTimeout(() => done(null), 15000);
@@ -2427,7 +2474,7 @@ if (typeof module !== 'undefined') {
       } catch (e) {
         done(null);
       }
-    });
+    }));
   }
 
   async function filterSmallFiles(mediaList) {
@@ -2502,7 +2549,8 @@ if (typeof module !== 'undefined') {
 
   function fetchMediaBlob(url, timeoutMs, label) {
     countRequest(1);
-    return new Promise((resolve) => {
+    // v1.2.2：请求前随机间隔（超时窗口自请求实际发出起算）
+    return withDownloadJitter(() => new Promise((resolve) => {
       let settled = false;
       const finish = (result) => { if (!settled) { settled = true; clearTimeout(timer); resolve(result); } };
       const timer = setTimeout(() => finish({ success: false, data: null, size: 0, error: '超时' }), timeoutMs);
@@ -2551,7 +2599,7 @@ if (typeof module !== 'undefined') {
         flagConnectBlocked(errText);
         finish({ success: false, data: null, size: 0, error: errText });
       }
-    });
+    }));
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -2823,7 +2871,8 @@ if (typeof module !== 'undefined') {
 
   /** GM_download 单个文件（Promise 化）；onload/onerror 遇 429/403 交 maybeFuseResponse 判定 */
   function gmDownloadPromise(task) {
-    return new Promise((resolve) => {
+    // v1.2.2：请求前随机间隔（硬超时窗口自请求实际发出起算）
+    return withDownloadJitter(() => new Promise((resolve) => {
       let done = false;
       const settle = (ok, msg) => { if (done) return; done = true; if (msg) log(msg); resolve(ok); };
       try {
@@ -2855,7 +2904,7 @@ if (typeof module !== 'undefined') {
         settle(false, `[✗] GM_download 异常: ${task.filename} (${e.message})`);
       }
       setTimeout(() => settle(false, `[✗] 下载超时(硬): ${task.filename}`), CONFIG.REQUEST_TIMEOUT_MS);
-    });
+    }));
   }
 
   /** 预算/熔断守卫：超限或熔断时置位并返回 true */
