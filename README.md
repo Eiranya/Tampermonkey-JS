@@ -13,7 +13,7 @@
 | 脚本 | 平台 | 当前版本 | 用途 |
 |---|---|---|---|
 | `twitter-image-saver.user.js` | X / Twitter | v1.4.0 | 用户主页自动滚动采集，图片 + 视频打包 ZIP |
-| `instagram-image-saver.user.js` | Instagram | v1.3.0 | 用户主页 / 帖子页采集（支持自动巡览），原图优先，图片 + 视频打包 ZIP |
+| `instagram-image-saver.user.js` | Instagram | v1.3.1 | 用户主页 / 帖子页采集（支持自动巡览），原图优先，图片 + 视频打包 ZIP |
 
 两个脚本**相互独立**，可同时安装，互不干扰（分别只在各自平台域名生效）。
 
