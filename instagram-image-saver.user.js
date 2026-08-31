@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Instagram 媒体批量保存器
 // @namespace    https://github.com/Eiranya/Tampermonkey-JS
-// @version      1.2.2
+// @version      1.3.0
 // @description  在 Instagram 用户主页 / 帖子页一键批量保存图片和视频（打包 ZIP），JSON 优先解析内嵌数据（_sharedData / __additionalDataLoaded / xdt_api__v1__），支持轮播全量、增量去重、已保存记忆、小文件过滤（HEAD/Range 预筛 + 下载后实际字节复核）、自动排除快拍/精选封面、降频自动滚动（5–15s ± 抖动）、请求预算与风控熔断、断点续抓、可视化设置面板
 // @author       WorkBuddy
 // @updateURL    https://raw.githubusercontent.com/Eiranya/Tampermonkey-JS/main/instagram-image-saver.user.js
@@ -257,7 +257,7 @@ if (typeof module !== 'undefined') {
   try { debugMode = !!GM_getValue('igDebugMode', false); } catch (e) {}
 
   // v1.1.22：脚本版本号（与 @version 元数据同步，设置面板 Debug 小节展示）
-  const SCRIPT_VERSION = '1.2.2';
+  const SCRIPT_VERSION = '1.3.0';
 
   // ════════════════════════════════════════════════════════════════
   // 📌 配置区
@@ -294,7 +294,7 @@ if (typeof module !== 'undefined') {
     VIDEO_ZIP_MAX_MB: 150,
     // v1.2.2：下载请求随机间隔（毫秒）——每次下载类请求（HEAD/Range 探测、Blob 拉取、GM_download）
     // 发出前随机等待，呈"短间隔为主、长间隔稀少"的偏态分布，避免请求集中发送触发风控
-    DOWNLOAD_DELAY_MIN_MS: 300,
+    DOWNLOAD_DELAY_MIN_MS: 400,
     DOWNLOAD_DELAY_MAX_MS: 5000,
   });
 
@@ -323,10 +323,14 @@ if (typeof module !== 'undefined') {
     // v1.2.1：请求预算窗口时长（毫秒）——由"每小时"下调为"每半小时"。
     // 窗口越短，爆发式请求被摊平得越保守；与 REQUEST_BUDGET 一起决定实际速率上限。
     BUDGET_WINDOW_MS: 30 * 60 * 1000,
-    // v1.2.2：下载间隔偏斜指数——delay = min + (max-min) * rand^SKEW，>1 时短间隔出现概率更高
+    // v1.3.0：下载间隔偏斜指数——delay = min + (max-min) * rand^SKEW，>1 时短间隔出现概率更高
     // ★ 内部常量，不进设置面板（用户明确要求从设置菜单移除，仅改代码调整）
-    // SKEW=4 时：约 45% 的间隔 < 0.5s、约 62% < 1s、约 17% > 2.5s（min=300ms / max=5000ms 基准）
-    DOWNLOAD_DELAY_SKEW: 4,
+    // SKEW=2 时：约 15% 的间隔 < 0.5s、约 36% < 1s、约 32% > 2.5s（min=400ms / max=5000ms 基准）
+    // 相比 SKEW=4 把约 45% 间隔压在 0.3–0.5s 的"节拍器式"密集簇，SKEW=2 拉长间隔、制造偶发长停顿，更贴近真人节奏、更抗风控
+    DOWNLOAD_DELAY_SKEW: 2,
+    // v1.3.0：下载顺序随机打乱（抗风控——避免请求按采集顺序规律排列）。
+    // ★ 内部常量，不进设置面板；置 false 可恢复原始顺序（调试用）。
+    SHUFFLE_DOWNLOAD_ORDER: true,
     // HEAD 请求并发数
     HEAD_CONCURRENCY: 4,
     // 轮播点击展开的最小/最大间隔（毫秒，随机化）
@@ -2920,10 +2924,25 @@ if (typeof module !== 'undefined') {
 
   // v1.1.22：浏览过程不下任何文件（无即时下载）；保存时——图片 + 小视频（< 视频打包阈值）进 ZIP，
   // 大视频（≥ 阈值，或大小未知时补探测一次）走 GM_download 单独下载。
+  // v1.3.0：Fisher–Yates 原地打乱（返回新数组，不修改入参）——用于下载顺序随机化
+  function shuffleArray(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  }
+
   async function downloadAsZip(mediaList) {
     if (state.fuse) {
       log('风控熔断：中止保存');
       return { saved: 0, failed: 0, failedItems: [], savedKeys: [], zipSize: 0, filteredOut: 0 };
+    }
+    // v1.3.0：下载顺序随机打乱（抗风控——避免请求按采集顺序规律排列）
+    if (CONFIG.SHUFFLE_DOWNLOAD_ORDER && mediaList && mediaList.length > 1) {
+      mediaList = shuffleArray(mediaList);
+      log(`下载顺序已随机打乱（${mediaList.length} 个媒体）`);
     }
     const tasks = buildDownloadTasks(mediaList);
     // v1.1.22：视频分流（白名单制）——只有"明确探测到 ≥ VIDEO_ZIP_MAX_MB"的视频单独下载；
