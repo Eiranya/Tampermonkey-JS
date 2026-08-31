@@ -3091,6 +3091,22 @@ if (typeof module !== 'undefined') {
     return n;
   }
 
+  // 面板专属一次性样式块：数字输入框隐藏 spinner、复选框自定义为方案 B 紫罗兰
+  // （勾选 #7c5cff + 白勾、未勾选 #c4b5fd 边框）—— 作用域限定为面板 ID，不污染宿主页
+  function ensurePanelStyles() {
+    const styleId = PANEL_ID + '-styles';
+    if (document.getElementById(styleId)) return;
+    const s = document.createElement('style');
+    s.id = styleId;
+    s.textContent =
+      '#' + PANEL_ID + ' input[type=number]{appearance:textfield;-moz-appearance:textfield}' +
+      '#' + PANEL_ID + ' input[type=number]::-webkit-outer-spin-button,' +
+      '#' + PANEL_ID + ' input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}' +
+      '#' + PANEL_ID + ' input[type=checkbox]{-webkit-appearance:none;appearance:none;width:18px;height:18px;border:1.5px solid #c4b5fd;border-radius:4px;background-color:#fff;cursor:pointer;position:relative;vertical-align:middle;margin:0;padding:0;flex:none}' +
+      '#' + PANEL_ID + ' input[type=checkbox]:checked{background-color:#7c5cff;border-color:#7c5cff;background-image:url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 16 16\'%3E%3Cpath d=\'M4 8l3 3 5-6\' stroke=\'white\' stroke-width=\'2.5\' fill=\'none\' stroke-linecap=\'round\' stroke-linejoin=\'round\'/%3E%3C/svg%3E");background-size:12px 12px;background-position:center;background-repeat:no-repeat}';
+    document.head.appendChild(s);
+  }
+
   function updatePanel() {
     const el = document.getElementById('ig-panel-status');
     if (!el) return;
@@ -3193,6 +3209,8 @@ if (typeof module !== 'undefined') {
     const old = document.getElementById(PANEL_ID);
     if (old) old.remove();
 
+    ensurePanelStyles();
+
     const panel = makeEl('div', [
       'position: fixed',
       `bottom: calc(${CONFIG.BUTTON_POSITION.bottom} + 56px)`,
@@ -3264,7 +3282,7 @@ if (typeof module !== 'undefined') {
         input.max = String(t.max);
         input.step = String(t.step);
         input.value = String(Math.round(CONFIG[t.key] / t.scale));
-        input.style.cssText = 'width:56px;text-align:right;border:0.5px solid #cfd9de;border-radius:6px;padding:3px 6px;font-size:13px;color:#0f1419;outline:none;box-sizing:border-box;background:#fff';
+        input.style.cssText = 'width:80px;appearance:textfield;-moz-appearance:textfield;text-align:right;border:0.5px solid #cfd9de;border-radius:6px;padding:3px 6px;font-size:13px;color:#0f1419;outline:none;box-sizing:border-box;background:#fff';
         input.addEventListener('change', () => {
           let v = Number(input.value);
           if (!Number.isFinite(v)) v = CONFIG[t.key] / t.scale;
@@ -3275,7 +3293,7 @@ if (typeof module !== 'undefined') {
           log(`配置已更新：${t.label} = ${Math.round(v)}${t.unit}`);
         });
         right.appendChild(input);
-        right.appendChild(makeEl('span', 'margin-left:6px;font-size:12px;color:#536471;width:22px', t.unit));
+        right.appendChild(makeEl('span', 'margin-left:6px;font-size:12px;color:#536471;width:30px;white-space:nowrap', t.unit));
       }
       row.appendChild(right);
       body.appendChild(row);
